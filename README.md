@@ -1,16 +1,22 @@
 # ghbackup
 
-A modern, fast Python CLI tool to backup entire GitHub organizations and user accounts with full (`.zip`) and partial (`.patch`) backup modes.
+A modern, fast Python CLI tool to backup entire GitHub organizations and user accounts with full (`.zip`) and partial (`.patch`) backup modes, and restore individual repositories to any point in time.
 
 ## Overview
 
-`ghbackup` automates the process of backing up all repositories in a GitHub organization or user account. It maintains previous states, rotates backup folders safely, and produces binary-compatible patches or complete archives.
+`ghbackup` provides commands to:
+1. **`backup`**: Automatically backup all repositories in a GitHub organization or user account. It maintains previous states, rotates backup folders safely, and produces binary-compatible patches or complete archives.
+2. **`restore`**: Restore any individual repository (`<org>/<repo>`) from the nearest full backup archive (`.zip`) plus any intermediate binary patches (`.patch`) up to an optional target date/time.
 
 ### Key Features
 
-- **Backup Modes:**
+- **Backup Modes (`backup`):**
   - **Full Backup (`--full` / `-f`)**: Clones all repositories and packages them into a compressed `.zip` archive.
   - **Partial Backup (`--partial` / `-p`)**: Rotates existing repositories from `<org>-repo` to `<org>-repo-previous`, clones the latest state into `<org>-repo`, and computes a binary-compatible `.patch` using `git diff --binary --no-index`. Requires an existing `<org>-repo` directory from a prior backup.
+- **Repository Restore (`restore`):**
+  - **Point-in-Time Restore**: Accepts an optional `--date` / `-d` and restores the repository from the nearest full backup on or before that date, followed by sequentially applying all intermediate patches up to that date.
+  - **Custom Source & Target Directories**: Select the source directory containing backup archives/patches (`--source` / `-s`) and the target destination folder (`--target` / `-t`).
+  - **Selective Patching**: Accurately filters multi-repo patches to extract and apply only changes relevant to the target repository.
 - **Automatic Directory Rotation:**
   - Clones into `<org>-repo`.
   - If `<org>-repo` already exists, any existing `<org>-repo-previous` is removed and `<org>-repo` is renamed to `<org>-repo-previous`.
@@ -44,19 +50,20 @@ uv sync
 You can run `ghbackup` via the provided `./ghbackup` script or via `uv run src.main:app`:
 
 ```bash
-# Using the wrapper script
-./ghbackup --full gpfister
-./ghbackup --partial gpfister
+# General help
+./ghbackup --help
 
-# Or using uv run
-uv run src.main:app --full gpfister
-uv run src.main:app --partial gpfister
+# Subcommand help
+./ghbackup backup --help
+./ghbackup restore --help
 ```
 
-### Command Options
+---
+
+### Backup Command (`ghbackup backup`)
 
 ```text
-Usage: ghbackup [OPTIONS] <ORG_OR_USER>
+Usage: ghbackup backup [OPTIONS] <ORG_OR_USER>
 
   Backup an entire GitHub organization or user repositories.
 
@@ -89,7 +96,35 @@ Options:
                               omitted, all repositories are backed up.
   --dry-run                   Fetch and list repositories without cloning or
                               creating backups.
-  -v, --version               Show the version and exit.
+  -h, --help                  Show this message and exit.
+```
+
+---
+
+### Restore Command (`ghbackup restore`)
+
+```text
+Usage: ghbackup restore [OPTIONS] <ORG/REPO>
+
+  Restore a repository (<org>/<repo>) from the nearest full backup and
+  intermediate patches.
+
+Arguments:
+  <ORG/REPO>  Target repository formatted as <org>/<repo> (e.g. gpfister/myrepo)  [required]
+
+Options:
+  -s, --source, --source-dir DIRECTORY
+                              Directory containing backup files (.zip and
+                              .patch). Defaults to current directory.
+  -t, --target, --target-dir DIRECTORY
+                              Destination directory to restore the
+                              repository to. Defaults to ./<repo>.
+  -d, -D, --date TEXT         Restore to the state at this date/time (e.g.
+                              'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or
+                              'YYYYMMDD_HHMMSS'). Defaults to latest
+                              available state.
+  -f, --force                 Overwrite destination directory if it already
+                              exists and is not empty.
   -h, --help                  Show this message and exit.
 ```
 
@@ -99,7 +134,7 @@ Options:
 
 ### 1. Full Backup
 ```bash
-./ghbackup --full gpfister
+./ghbackup backup --full gpfister
 ```
 Output:
 - Clones all repositories into `./gpfister-repo/`
@@ -108,37 +143,48 @@ Output:
 
 ### 2. Backup using a Custom SSH Key
 ```bash
-./ghbackup --full --ssh-key ~/.ssh/id_ed25519 gpfister
+./ghbackup backup --full --ssh-key ~/.ssh/id_ed25519 gpfister
 # Or using short option aliases:
-./ghbackup --full -i ~/.ssh/id_ed25519 gpfister
-./ghbackup --full -k ~/.ssh/id_ed25519 gpfister
+./ghbackup backup --full -i ~/.ssh/id_ed25519 gpfister
+./ghbackup backup --full -k ~/.ssh/id_ed25519 gpfister
 ```
 
 ### 3. Partial Backup
 > Note: Requires an existing `./gpfister-repo/` directory (e.g. from a prior full backup).
 ```bash
-./ghbackup --partial gpfister
+./ghbackup backup --partial gpfister
 ```
 Output:
 - Rotates existing `./gpfister-repo/` to `./gpfister-repo-previous/`
 - Clones fresh repositories into `./gpfister-repo/`
 - Creates `./gpfister-repo-YYYYMMDD_HHMMSS.patch` (and updates `./gpfister-repo.patch`)
 
-### 4. Applying a Partial Backup Patch
-To restore or bring an existing backup directory up-to-date with the patch:
-
+### 4. Restore Repository to Latest State
 ```bash
-# Apply patch from the parent directory:
-git apply -p2 --unsafe-paths --directory=gpfister-repo-previous gpfister-repo.patch
+# Restore repository gpfister/ghbackup from backups in current folder to ./ghbackup
+./ghbackup restore gpfister/ghbackup
 
-# Or from inside the directory:
-cd gpfister-repo-previous
-git apply -p2 --unsafe-paths ../gpfister-repo.patch
+# Specify source folder where backups are stored and a custom destination folder
+./ghbackup restore gpfister/ghbackup --source /mnt/backups --target /tmp/restored-ghbackup
 ```
 
-### 5. Dry Run (Preview Repositories)
+### 5. Restore Repository to a Specific Date/Time
 ```bash
-./ghbackup --dry-run gpfister
+# Restore repository as it existed on September 15, 2026 at 14:30
+./ghbackup restore gpfister/ghbackup -s /mnt/backups -t ./ghbackup -d "2026-09-15 14:30:00"
+
+# Restore by date (finds nearest full backup on/before date + patches in between)
+./ghbackup restore gpfister/ghbackup -s /mnt/backups -t ./ghbackup -d 2026-09-15
+```
+
+### 6. Overwrite Existing Destination
+```bash
+./ghbackup restore gpfister/ghbackup --target ./ghbackup --force
+```
+
+### 7. Dry Run (Preview Repositories to Backup)
+```bash
+./ghbackup backup --dry-run gpfister
 ```
 
 ---
@@ -153,12 +199,14 @@ git apply -p2 --unsafe-paths ../gpfister-repo.patch
 ├── ghbackup.sh             # Alternative shell wrapper script
 ├── src/
 │   ├── __init__.py         # Package metadata
-│   ├── main.py             # CLI definition and workflow execution
+│   ├── main.py             # CLI definition with 'backup' and 'restore' commands
 │   ├── github.py           # GitHub API client with org & user discovery
 │   ├── clone.py            # Git cloning and directory rotation logic
-│   └── backup.py           # Full (.zip) and Partial (.patch) creation
+│   ├── backup.py           # Full (.zip) and Partial (.patch) creation
+│   └── restore.py          # Point-in-time restore from full backup + patches
 └── tests/
-    └── test_backup.py      # Test suite
+    ├── test_backup.py      # Backup command and rotation test suite
+    └── test_restore.py     # Restore command and chain resolution test suite
 ```
 
 ---
@@ -174,4 +222,3 @@ Created and maintained by **Greg PFISTER** in France.
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
 Copyright (c) 2026 Greg PFISTER, France.
-

@@ -33,14 +33,14 @@ def temp_dir():
 
 def test_cli_requires_full_or_partial(runner):
     """Test that CLI errors out when neither --full nor --partial is specified."""
-    result = runner.invoke(app, ["myorg"])
+    result = runner.invoke(app, ["backup", "myorg"])
     assert result.exit_code == 1
     assert "You must specify either --full (-f) or --partial (-p)" in result.output
 
 
 def test_cli_mutual_exclusion(runner):
     """Test that CLI errors out when both --full and --partial are specified."""
-    result = runner.invoke(app, ["--full", "--partial", "myorg"])
+    result = runner.invoke(app, ["backup", "--full", "--partial", "myorg"])
     assert result.exit_code == 1
     assert "Cannot specify both --full and --partial" in result.output
 
@@ -184,7 +184,7 @@ def test_create_partial_backup_without_baseline(temp_dir):
 
 def test_cli_partial_backup_fails_if_no_repo(runner, temp_dir):
     """Test that CLI errors out when --partial is used but no <org>-repo exists."""
-    result = runner.invoke(app, ["--partial", "testorg", "--output-dir", str(temp_dir)])
+    result = runner.invoke(app, ["backup", "--partial", "testorg", "--output-dir", str(temp_dir)])
     assert result.exit_code == 1
     assert "Cannot perform partial backup" in result.output
     assert "testorg-repo" in result.output
@@ -196,7 +196,7 @@ def test_cli_partial_backup_fails_if_repo_is_file(runner, temp_dir):
     repo_file = temp_dir / "testorg-repo"
     repo_file.write_text("not a directory")
 
-    result = runner.invoke(app, ["--partial", "testorg", "--output-dir", str(temp_dir)])
+    result = runner.invoke(app, ["backup", "--partial", "testorg", "--output-dir", str(temp_dir)])
     assert result.exit_code == 1
     assert "Cannot perform partial backup" in result.output
     assert "is not a directory" in result.output
@@ -228,7 +228,7 @@ def test_cli_full_backup_e2e(runner, temp_dir):
          patch("src.clone.clone_repository", side_effect=mock_clone):
         result = runner.invoke(
             app,
-            ["--full", "testorg", "--output-dir", str(temp_dir)]
+            ["backup", "--full", "testorg", "--output-dir", str(temp_dir)]
         )
         assert result.exit_code == 0
         assert "Full Backup Created Successfully!" in result.output
@@ -267,7 +267,7 @@ def test_cli_partial_backup_e2e(runner, temp_dir):
          patch("src.clone.clone_repository", side_effect=mock_clone):
         result = runner.invoke(
             app,
-            ["--partial", "testorg", "--output-dir", str(temp_dir)]
+            ["backup", "--partial", "testorg", "--output-dir", str(temp_dir)]
         )
         assert result.exit_code == 0
         assert "Partial Backup Created Successfully!" in result.output
@@ -329,7 +329,7 @@ def test_github_api_fallback_to_user():
 def test_cli_ssh_key_nonexistent(runner, temp_dir):
     """Test that CLI errors out when --ssh-key specifies a nonexistent file."""
     fake_key = temp_dir / "nonexistent_key"
-    result = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(fake_key)])
+    result = runner.invoke(app, ["backup", "--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(fake_key)])
     assert result.exit_code == 1
     assert "SSH key file does not exist" in result.output
 
@@ -338,7 +338,7 @@ def test_cli_ssh_key_is_directory(runner, temp_dir):
     """Test that CLI errors out when --ssh-key specifies a directory."""
     key_dir = temp_dir / "key_dir"
     key_dir.mkdir()
-    result = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_dir)])
+    result = runner.invoke(app, ["backup", "--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_dir)])
     assert result.exit_code != 0
 
 
@@ -373,7 +373,7 @@ def test_cli_ssh_key_e2e(runner, temp_dir):
          patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 10, "compressed_bytes": 5}):
         result = runner.invoke(
             app,
-            ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_file)]
+            ["backup", "--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_file)]
         )
         assert result.exit_code == 0
         assert "SSH Key:" in result.output
@@ -396,14 +396,14 @@ def test_cli_ssh_key_aliases(runner, temp_dir):
          patch("src.main.clone_all_repositories", return_value=mock_summary) as mock_clone, \
          patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 5, "compressed_bytes": 2}):
         # Test -k
-        res_k = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "-k", str(key_file)])
+        res_k = runner.invoke(app, ["backup", "--full", "testorg", "--output-dir", str(temp_dir), "-k", str(key_file)])
         assert res_k.exit_code == 0
         assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
         assert mock_clone.call_args[1]["use_ssh"] is True
 
         # Test -i
         mock_clone.reset_mock()
-        res_i = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "-i", str(key_file)])
+        res_i = runner.invoke(app, ["backup", "--full", "testorg", "--output-dir", str(temp_dir), "-i", str(key_file)])
         assert res_i.exit_code == 0
         assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
         assert mock_clone.call_args[1]["use_ssh"] is True
@@ -421,7 +421,7 @@ def test_cli_ssh_key_envvar(runner, temp_dir):
          patch("src.main.clone_all_repositories", return_value=mock_summary) as mock_clone, \
          patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 5, "compressed_bytes": 2}), \
          patch.dict(os.environ, {"GH_SSH_KEY": str(key_file)}):
-        res = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir)])
+        res = runner.invoke(app, ["backup", "--full", "testorg", "--output-dir", str(temp_dir)])
         assert res.exit_code == 0
         assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
         assert mock_clone.call_args[1]["use_ssh"] is True

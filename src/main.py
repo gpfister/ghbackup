@@ -20,6 +20,7 @@ from src.github import (
     fetch_org_or_user_repos,
     resolve_github_token,
 )
+from src.restore import RestoreError, restore_repository
 
 console = Console()
 error_console = Console(stderr=True)
@@ -37,8 +38,19 @@ def format_bytes(size: int) -> str:
     return f"{size_float:.2f} {power_labels[n]}"
 
 
-@click.command(
+@click.group(
     name="ghbackup",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help="GitHub Backup & Restore CLI: backup organizations and restore individual repositories.",
+)
+@click.version_option(version=__version__, prog_name="ghbackup")
+def app() -> None:
+    """GitHub backup and restore management tool."""
+    pass
+
+
+@app.command(
+    name="backup",
     context_settings={"help_option_names": ["-h", "--help"]},
     help="Backup an entire GitHub organization or user repositories.",
 )
@@ -128,8 +140,7 @@ def format_bytes(size: int) -> str:
     default=False,
     help="Fetch and list repositories without cloning or creating backups.",
 )
-@click.version_option(version=__version__, prog_name="ghbackup")
-def app(
+def backup_cmd(
     org: str,
     full_mode: bool,
     partial_mode: bool,
@@ -151,7 +162,7 @@ def app(
             "[bold red]Error:[/bold red] You must specify either [bold cyan]--full[/bold cyan] (-f) "
             "or [bold cyan]--partial[/bold cyan] (-p) backup mode."
         )
-        error_console.print("Run [bold]ghbackup --help[/bold] for usage information.")
+        error_console.print("Run [bold]ghbackup backup --help[/bold] for usage information.")
         sys.exit(1)
 
     if full_mode and partial_mode:
@@ -365,6 +376,145 @@ def app(
                 border_style="green",
             )
         )
+
+
+@app.command(
+    name="restore",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help="Restore a repository (<org>/<repo>) from the nearest full backup and intermediate patches.",
+)
+@click.argument("repository", required=True, metavar="<ORG/REPO>")
+@click.option(
+    "--source",
+    "-s",
+    "--source-dir",
+    "source_dir_str",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=str),
+    help="Directory containing backup files (.zip and .patch). Defaults to current directory.",
+)
+@click.option(
+    "--target",
+    "-t",
+    "--target-dir",
+    "target_dir_str",
+    default=None,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=str),
+    help="Destination directory to restore the repository to. Defaults to ./<repo>.",
+)
+@click.option(
+    "--date",
+    "-d",
+    "-D",
+    "date_str",
+    default=None,
+    type=str,
+    help="Restore to the state at this date/time (e.g. 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or 'YYYYMMDD_HHMMSS'). Defaults to latest available state.",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Overwrite destination directory if it already exists and is not empty.",
+)
+def restore_cmd(
+    repository: str,
+    source_dir_str: str,
+    target_dir_str: Optional[str],
+    date_str: Optional[str],
+    force: bool,
+) -> None:
+    """Restore a repository (<org>/<repo>) from backup archives and patches."""
+    if "/" not in repository:
+        error_console.print(
+            f"[bold red]Error:[/bold red] Invalid repository identifier '[bold cyan]{repository}[/bold cyan]'.\n"
+            f"Expected format: <org>/<repo> (for example: 'gpfister/ghbackup')."
+        )
+        sys.exit(1)
+
+    parts = repository.strip().split("/", 1)
+    org, repo = parts[0].strip(), parts[1].strip()
+
+    source_dir = Path(source_dir_str).resolve()
+    target_dir = Path(target_dir_str if target_dir_str else repo).resolve()
+
+    date_label = date_str if date_str else "Latest available state"
+
+    config_lines = [
+        f"[bold green]GitHub Restore CLI[/bold green] (ghbackup v{__version__})",
+        f"[bold]Target Repository:[/bold] [cyan]{org}/{repo}[/cyan]",
+        f"[bold]Source Directory:[/bold] [blue]{source_dir}[/blue]",
+        f"[bold]Target Directory:[/bold] [magenta]{target_dir}[/magenta]",
+        f"[bold]Target Date/Time:[/bold] [yellow]{date_label}[/yellow]",
+        f"[bold]Overwrite Force:[/bold] {'[green]Enabled[/green]' if force else '[dim]Disabled[/dim]'}",
+    ]
+
+    console.print(
+        Panel.fit(
+            "\n".join(config_lines),
+            title="[bold]Restore Configuration[/bold]",
+            border_style="cyan",
+        )
+    )
+
+    def progress_callback(stage: str, message: str) -> None:
+        if stage == "scan":
+            console.print(f"[dim]•[/dim] {message}")
+        elif stage == "select":
+            console.print(f"[bold cyan]✓[/bold cyan] {message}")
+        elif stage == "extract":
+            console.print(f"[bold green]✓[/bold green] {message}")
+        elif stage == "patch_apply":
+            console.print(f"  [green]✓ Applied:[/green] {message}")
+        elif stage == "patch_skip":
+            console.print(f"  [dim]- Skipped (no changes): {message}[/dim]")
+        elif stage == "clean":
+            console.print(f"[yellow]! Cleaned destination:[/yellow] {message}")
+
+    try:
+        result = restore_repository(
+            source_dir=source_dir,
+            target_dir=target_dir,
+            repository=repository,
+            target_date=date_str,
+            force=force,
+            progress_callback=progress_callback,
+        )
+    except RestoreError as e:
+        error_console.print(f"[bold red]Restore Error:[/bold red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        error_console.print(f"[bold red]Unexpected Error:[/bold red] {e}")
+        sys.exit(2)
+
+    # Success display
+    applied = result["applied_patches"]
+    skipped = result["skipped_patches"]
+    base = result["base_backup"]
+
+    summary_lines = [
+        f"[bold green]Repository Restored Successfully![/bold green]\n",
+        f"[bold]Repository:[/bold] [cyan]{result['org']}/{result['repo']}[/cyan]",
+        f"[bold]Destination:[/bold] [blue]{result['target_dir']}[/blue]",
+        f"[bold]Base Backup:[/bold] {base['filename']} ({base['timestamp'].strftime('%Y-%m-%d %H:%M:%S')})",
+        f"[bold]Files Extracted:[/bold] {result['files_extracted']}",
+        f"[bold]Uncompressed Size:[/bold] {format_bytes(result['uncompressed_bytes'])}",
+        f"[bold]Intermediate Patches:[/bold] {len(applied)} applied, {len(skipped)} skipped (total {result['intermediate_patches_total']})",
+    ]
+
+    if applied:
+        summary_lines.append("\n[bold]Applied Patches:[/bold]")
+        for p in applied:
+            summary_lines.append(f"  - {p['filename']} ({p['timestamp'].strftime('%Y-%m-%d %H:%M:%S')})")
+
+    console.print(
+        Panel.fit(
+            "\n".join(summary_lines),
+            title="[bold]Restore Summary[/bold]",
+            border_style="green",
+        )
+    )
 
 
 if __name__ == "__main__":
