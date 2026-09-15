@@ -4,10 +4,11 @@
 """Git cloning and directory rotation management."""
 
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from rich.console import Console
 
 console = Console()
@@ -53,6 +54,7 @@ def clone_repository(
     target_dir: Path,
     token: Optional[str] = None,
     use_ssh: bool = False,
+    ssh_key: Optional[Union[Path, str]] = None,
     mirror: bool = False,
     timeout: int = 300,
 ) -> Tuple[bool, str]:
@@ -63,12 +65,16 @@ def clone_repository(
         target_dir: Destination path for the repository.
         token: Optional GitHub Personal Access Token for HTTPS auth.
         use_ssh: Whether to use SSH clone URL.
+        ssh_key: Optional path to SSH private key to use for authentication.
         mirror: Whether to clone as a bare mirror.
         timeout: Maximum seconds to wait for git clone.
 
     Returns:
         Tuple[bool, str]: (Success status, stdout/stderr message).
     """
+    if ssh_key:
+        use_ssh = True
+
     repo_name = repo_info["name"]
     dest_path = target_dir / (f"{repo_name}.git" if mirror else repo_name)
 
@@ -76,13 +82,19 @@ def clone_repository(
         # Target already exists (e.g. re-clone attempt)
         shutil.rmtree(dest_path)
 
-    clone_url = repo_info["ssh_url"] if use_ssh else repo_info["clone_url"]
+    clone_url = (repo_info.get("ssh_url") or repo_info.get("clone_url")) if use_ssh else repo_info["clone_url"]
 
     cmd: List[str] = ["git"]
 
     # If token is provided and using HTTPS, pass authorization header securely
     if token and not use_ssh:
         cmd.extend(["-c", f"http.extraheader=AUTHORIZATION: bearer {token}"])
+
+    ssh_key_resolved = None
+    if ssh_key:
+        ssh_key_resolved = str(Path(os.path.expanduser(str(ssh_key))).resolve())
+        ssh_cmd = f"ssh -i {shlex.quote(ssh_key_resolved)} -o IdentitiesOnly=yes"
+        cmd.extend(["-c", f"core.sshCommand={ssh_cmd}"])
 
     cmd.append("clone")
     if mirror:
@@ -93,6 +105,9 @@ def clone_repository(
     env = os.environ.copy()
     # Prevent git from hanging waiting for interactive username/password prompts
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if ssh_key_resolved:
+        ssh_cmd = f"ssh -i {shlex.quote(ssh_key_resolved)} -o IdentitiesOnly=yes"
+        env["GIT_SSH_COMMAND"] = ssh_cmd
 
     try:
         proc = subprocess.run(
@@ -120,6 +135,7 @@ def clone_all_repositories(
     target_dir: Path,
     token: Optional[str] = None,
     use_ssh: bool = False,
+    ssh_key: Optional[Union[Path, str]] = None,
     mirror: bool = False,
     progress_callback: Optional[Callable[[int, int, str, bool], None]] = None,
 ) -> Dict[str, Any]:
@@ -140,6 +156,7 @@ def clone_all_repositories(
             target_dir=target_dir,
             token=token,
             use_ssh=use_ssh,
+            ssh_key=ssh_key,
             mirror=mirror,
         )
 

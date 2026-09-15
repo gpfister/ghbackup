@@ -15,7 +15,7 @@ import pytest
 from click.testing import CliRunner
 
 from src.backup import create_full_backup, create_partial_backup
-from src.clone import rotate_backup_directories
+from src.clone import clone_all_repositories, clone_repository, rotate_backup_directories
 from src.github import fetch_org_or_user_repos, resolve_github_token
 from src.main import app
 
@@ -324,3 +324,179 @@ def test_github_api_fallback_to_user():
         assert target_type == "user"
         assert len(repos) == 1
         assert repos[0]["name"] == "test-repo"
+
+
+def test_cli_ssh_key_nonexistent(runner, temp_dir):
+    """Test that CLI errors out when --ssh-key specifies a nonexistent file."""
+    fake_key = temp_dir / "nonexistent_key"
+    result = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(fake_key)])
+    assert result.exit_code == 1
+    assert "SSH key file does not exist" in result.output
+
+
+def test_cli_ssh_key_is_directory(runner, temp_dir):
+    """Test that CLI errors out when --ssh-key specifies a directory."""
+    key_dir = temp_dir / "key_dir"
+    key_dir.mkdir()
+    result = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_dir)])
+    assert result.exit_code != 0
+
+
+def test_cli_ssh_key_e2e(runner, temp_dir):
+    """Test CLI runs with --ssh-key and passes ssh_key to clone_all_repositories."""
+    key_file = temp_dir / "id_ed25519"
+    key_file.write_text("dummy-private-key")
+
+    mock_repos = [
+        {
+            "name": "sample-repo",
+            "full_name": "testorg/sample-repo",
+            "clone_url": "https://github.com/testorg/sample-repo.git",
+            "ssh_url": "git@github.com:testorg/sample-repo.git",
+            "is_fork": False,
+            "is_archived": False,
+            "is_private": False,
+            "default_branch": "main",
+            "size_kb": 10,
+        }
+    ]
+
+    mock_summary = {
+        "total": 1,
+        "successful": 1,
+        "failed": 0,
+        "failed_repos": [],
+    }
+
+    with patch("src.main.fetch_org_or_user_repos", return_value=("organization", mock_repos)), \
+         patch("src.main.clone_all_repositories", return_value=mock_summary) as mock_clone, \
+         patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 10, "compressed_bytes": 5}):
+        result = runner.invoke(
+            app,
+            ["--full", "testorg", "--output-dir", str(temp_dir), "--ssh-key", str(key_file)]
+        )
+        assert result.exit_code == 0
+        assert "SSH Key:" in result.output
+        assert str(key_file.resolve()) in result.output
+        mock_clone.assert_called_once()
+        call_kwargs = mock_clone.call_args[1]
+        assert call_kwargs["use_ssh"] is True
+        assert call_kwargs["ssh_key"] == key_file.resolve()
+
+
+def test_cli_ssh_key_aliases(runner, temp_dir):
+    """Test CLI -k and -i aliases for --ssh-key."""
+    key_file = temp_dir / "id_rsa"
+    key_file.write_text("dummy-rsa-key")
+
+    mock_repos = [{"name": "repo1", "clone_url": "https://...", "ssh_url": "git@...", "is_fork": False, "is_archived": False, "is_private": False, "default_branch": "main", "size_kb": 5}]
+    mock_summary = {"total": 1, "successful": 1, "failed": 0, "failed_repos": []}
+
+    with patch("src.main.fetch_org_or_user_repos", return_value=("user", mock_repos)), \
+         patch("src.main.clone_all_repositories", return_value=mock_summary) as mock_clone, \
+         patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 5, "compressed_bytes": 2}):
+        # Test -k
+        res_k = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "-k", str(key_file)])
+        assert res_k.exit_code == 0
+        assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
+        assert mock_clone.call_args[1]["use_ssh"] is True
+
+        # Test -i
+        mock_clone.reset_mock()
+        res_i = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir), "-i", str(key_file)])
+        assert res_i.exit_code == 0
+        assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
+        assert mock_clone.call_args[1]["use_ssh"] is True
+
+
+def test_cli_ssh_key_envvar(runner, temp_dir):
+    """Test GH_SSH_KEY environment variable."""
+    key_file = temp_dir / "id_env"
+    key_file.write_text("env-key")
+
+    mock_repos = [{"name": "repo1", "clone_url": "https://...", "ssh_url": "git@...", "is_fork": False, "is_archived": False, "is_private": False, "default_branch": "main", "size_kb": 5}]
+    mock_summary = {"total": 1, "successful": 1, "failed": 0, "failed_repos": []}
+
+    with patch("src.main.fetch_org_or_user_repos", return_value=("user", mock_repos)), \
+         patch("src.main.clone_all_repositories", return_value=mock_summary) as mock_clone, \
+         patch("src.main.create_full_backup", return_value={"archive_path": "a.zip", "total_files": 1, "uncompressed_bytes": 5, "compressed_bytes": 2}), \
+         patch.dict(os.environ, {"GH_SSH_KEY": str(key_file)}):
+        res = runner.invoke(app, ["--full", "testorg", "--output-dir", str(temp_dir)])
+        assert res.exit_code == 0
+        assert mock_clone.call_args[1]["ssh_key"] == key_file.resolve()
+        assert mock_clone.call_args[1]["use_ssh"] is True
+
+
+def test_clone_repository_with_ssh_key(temp_dir):
+    """Test clone_repository passes sshCommand and GIT_SSH_COMMAND properly."""
+    key_file = temp_dir / "id_ed25519"
+    key_file.write_text("fake-key")
+
+    repo_info = {
+        "name": "my-repo",
+        "clone_url": "https://github.com/myorg/my-repo.git",
+        "ssh_url": "git@github.com:myorg/my-repo.git",
+    }
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stderr = ""
+        mock_run.return_value = mock_proc
+
+        success, msg = clone_repository(
+            repo_info=repo_info,
+            target_dir=temp_dir,
+            ssh_key=key_file,
+        )
+
+        assert success is True
+        mock_run.assert_called_once()
+        call_args, call_kwargs = mock_run.call_args
+        cmd = call_args[0]
+        env = call_kwargs["env"]
+
+        # Verify SSH URL used
+        assert "git@github.com:myorg/my-repo.git" in cmd
+        # Verify core.sshCommand configured
+        assert "-c" in cmd
+        expected_ssh_cmd = f"ssh -i {key_file.resolve()} -o IdentitiesOnly=yes"
+        assert f"core.sshCommand={expected_ssh_cmd}" in cmd
+        # Verify GIT_SSH_COMMAND in env
+        assert env["GIT_SSH_COMMAND"] == expected_ssh_cmd
+
+
+def test_clone_repository_with_ssh_key_spaces(temp_dir):
+    """Test clone_repository handles SSH key paths containing spaces."""
+    key_dir = temp_dir / "my keys"
+    key_dir.mkdir()
+    key_file = key_dir / "id_rsa"
+    key_file.write_text("key-with-spaces")
+
+    repo_info = {
+        "name": "my-repo",
+        "clone_url": "https://github.com/myorg/my-repo.git",
+        "ssh_url": "git@github.com:myorg/my-repo.git",
+    }
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stderr = ""
+        mock_run.return_value = mock_proc
+
+        success, msg = clone_repository(
+            repo_info=repo_info,
+            target_dir=temp_dir,
+            ssh_key=key_file,
+        )
+
+        assert success is True
+        mock_run.assert_called_once()
+        call_args, call_kwargs = mock_run.call_args
+        cmd = call_args[0]
+        env = call_kwargs["env"]
+
+        expected_quoted = f"ssh -i '{key_file.resolve()}' -o IdentitiesOnly=yes"
+        assert f"core.sshCommand={expected_quoted}" in cmd
+        assert env["GIT_SSH_COMMAND"] == expected_quoted

@@ -3,6 +3,7 @@
 
 """Main entry point for ghbackup CLI tool."""
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -89,6 +90,16 @@ def format_bytes(size: int) -> str:
     help="Use SSH clone URLs (git@github.com:...) instead of HTTPS.",
 )
 @click.option(
+    "--ssh-key",
+    "-k",
+    "-i",
+    "ssh_key_str",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=str),
+    envvar=["GH_SSH_KEY", "GITHUB_SSH_KEY"],
+    help="Path to the SSH private key to use for git authentication.",
+)
+@click.option(
     "--include-forks/--no-forks",
     default=True,
     help="Include or exclude forked repositories (default: include).",
@@ -126,6 +137,7 @@ def app(
     output_dir_str: str,
     output_file_str: Optional[str],
     ssh: bool,
+    ssh_key_str: Optional[str],
     include_forks: bool,
     include_archived: bool,
     mirror: bool,
@@ -148,6 +160,24 @@ def app(
             "and [bold cyan]--partial[/bold cyan]. Please choose one mode."
         )
         sys.exit(1)
+
+    # Validate SSH key if provided
+    ssh_key_path: Optional[Path] = None
+    if ssh_key_str:
+        candidate_key = Path(os.path.expanduser(ssh_key_str)).resolve()
+        if not candidate_key.exists():
+            error_console.print(
+                f"[bold red]Error:[/bold red] SSH key file does not exist: '[bold cyan]{candidate_key}[/bold cyan]'"
+            )
+            sys.exit(1)
+        if not candidate_key.is_file():
+            error_console.print(
+                f"[bold red]Error:[/bold red] SSH key path is not a file: '[bold cyan]{candidate_key}[/bold cyan]'"
+            )
+            sys.exit(1)
+        ssh_key_path = candidate_key
+
+    use_ssh = ssh or (ssh_key_path is not None)
 
     output_dir = Path(output_dir_str).resolve()
     existing_repo_dir = output_dir / f"{org}-repo"
@@ -174,14 +204,22 @@ def app(
     custom_output_file = Path(output_file_str).resolve() if output_file_str else None
 
     mode_label = "DRY RUN" if dry_run else ("FULL (.zip)" if full_mode else "PARTIAL (.patch)")
+    protocol_label = "SSH" if use_ssh else "HTTPS"
+
+    config_lines = [
+        f"[bold green]GitHub Backup CLI[/bold green] (ghbackup v{__version__})",
+        f"[bold]Target:[/bold] [cyan]{org}[/cyan]",
+        f"[bold]Mode:[/bold] [magenta]{mode_label}[/magenta]",
+        f"[bold]Destination:[/bold] [blue]{output_dir}[/blue]",
+        f"[bold]Protocol:[/bold] [yellow]{protocol_label}[/yellow]",
+        f"[bold]Auth:[/bold] {'[green]Token present[/green]' if resolved_token else '[yellow]No token (public repos only)[/yellow]'}",
+    ]
+    if ssh_key_path:
+        config_lines.append(f"[bold]SSH Key:[/bold] [cyan]{ssh_key_path}[/cyan]")
 
     console.print(
         Panel.fit(
-            f"[bold green]GitHub Backup CLI[/bold green] (ghbackup v{__version__})\n"
-            f"[bold]Target:[/bold] [cyan]{org}[/cyan]\n"
-            f"[bold]Mode:[/bold] [magenta]{mode_label}[/magenta]\n"
-            f"[bold]Destination:[/bold] [blue]{output_dir}[/blue]\n"
-            f"[bold]Auth:[/bold] {'[green]Token present[/green]' if resolved_token else '[yellow]No token (public repos only)[/yellow]'}",
+            "\n".join(config_lines),
             title="[bold]Configuration[/bold]",
             border_style="green",
         )
@@ -268,7 +306,8 @@ def app(
         repos=repos,
         target_dir=current_repo_dir,
         token=resolved_token,
-        use_ssh=ssh,
+        use_ssh=use_ssh,
+        ssh_key=ssh_key_path,
         mirror=mirror,
         progress_callback=progress_callback,
     )

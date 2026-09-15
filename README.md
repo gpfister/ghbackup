@@ -76,6 +76,8 @@ Options:
                               file.
   --ssh                       Use SSH clone URLs (git@github.com:...) instead
                               of HTTPS.
+  -k, -i, --ssh-key FILE      Path to the SSH private key to use for git
+                              authentication.
   --include-forks / --no-forks
                               Include or exclude forked repositories (default:
                               include).
@@ -83,6 +85,8 @@ Options:
                               Include or exclude archived repositories
                               (default: include).
   --mirror                    Clone repositories as bare mirrors (--mirror).
+  -r, --repo TEXT             Filter specific repository name(s) to backup. If
+                              omitted, all repositories are backed up.
   --dry-run                   Fetch and list repositories without cloning or
                               creating backups.
   -v, --version               Show the version and exit.
@@ -102,7 +106,15 @@ Output:
 - Rotates any previous `./gpfister-repo/` to `./gpfister-repo-previous/`
 - Creates `./gpfister-repo-YYYYMMDD_HHMMSS.zip` (and updates `./gpfister-repo.zip`)
 
-### 2. Partial Backup
+### 2. Backup using a Custom SSH Key
+```bash
+./ghbackup --full --ssh-key ~/.ssh/id_ed25519 gpfister
+# Or using short option aliases:
+./ghbackup --full -i ~/.ssh/id_ed25519 gpfister
+./ghbackup --full -k ~/.ssh/id_ed25519 gpfister
+```
+
+### 3. Partial Backup
 > Note: Requires an existing `./gpfister-repo/` directory (e.g. from a prior full backup).
 ```bash
 ./ghbackup --partial gpfister
@@ -112,7 +124,7 @@ Output:
 - Clones fresh repositories into `./gpfister-repo/`
 - Creates `./gpfister-repo-YYYYMMDD_HHMMSS.patch` (and updates `./gpfister-repo.patch`)
 
-### 3. Applying a Partial Backup Patch
+### 4. Applying a Partial Backup Patch
 To restore or bring an existing backup directory up-to-date with the patch:
 
 ```bash
@@ -124,7 +136,7 @@ cd gpfister-repo-previous
 git apply -p2 --unsafe-paths ../gpfister-repo.patch
 ```
 
-### 4. Dry Run (Preview Repositories)
+### 5. Dry Run (Preview Repositories)
 ```bash
 ./ghbackup --dry-run gpfister
 ```
