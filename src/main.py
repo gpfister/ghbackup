@@ -398,9 +398,9 @@ def backup_cmd(
     "-t",
     "--target-dir",
     "target_dir_str",
-    default=None,
+    default=".",
     type=click.Path(file_okay=False, dir_okay=True, path_type=str),
-    help="Destination directory to restore the repository to. Defaults to ./<repo>.",
+    help="Target directory where <org>/<repo> will be created and restored. Defaults to current directory.",
 )
 @click.option(
     "--date",
@@ -421,7 +421,7 @@ def backup_cmd(
 def restore_cmd(
     repository: str,
     source_dir_str: str,
-    target_dir_str: Optional[str],
+    target_dir_str: str,
     date_str: Optional[str],
     force: bool,
 ) -> None:
@@ -437,7 +437,8 @@ def restore_cmd(
     org, repo = parts[0].strip(), parts[1].strip()
 
     source_dir = Path(source_dir_str).resolve()
-    target_dir = Path(target_dir_str if target_dir_str else repo).resolve()
+    target_base = Path(target_dir_str).resolve()
+    target_repo_dir = target_base / org / repo
 
     date_label = date_str if date_str else "Latest available state"
 
@@ -445,7 +446,8 @@ def restore_cmd(
         f"[bold green]GitHub Restore CLI[/bold green] (ghbackup v{__version__})",
         f"[bold]Target Repository:[/bold] [cyan]{org}/{repo}[/cyan]",
         f"[bold]Source Directory:[/bold] [blue]{source_dir}[/blue]",
-        f"[bold]Target Directory:[/bold] [magenta]{target_dir}[/magenta]",
+        f"[bold]Target Directory:[/bold] [magenta]{target_base}[/magenta]",
+        f"[bold]Restoration Path:[/bold] [cyan]{target_repo_dir}[/cyan]",
         f"[bold]Target Date/Time:[/bold] [yellow]{date_label}[/yellow]",
         f"[bold]Overwrite Force:[/bold] {'[green]Enabled[/green]' if force else '[dim]Disabled[/dim]'}",
     ]
@@ -475,7 +477,7 @@ def restore_cmd(
     try:
         result = restore_repository(
             source_dir=source_dir,
-            target_dir=target_dir,
+            target_dir=target_base,
             repository=repository,
             target_date=date_str,
             force=force,

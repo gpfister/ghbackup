@@ -326,12 +326,14 @@ def test_restore_full_backup_only(temp_dir):
         repository="testorg/myrepo",
     )
 
+    repo_dir = dest_dir / "testorg" / "myrepo"
     assert res["org"] == "testorg"
     assert res["repo"] == "myrepo"
+    assert res["target_dir"] == repo_dir
     assert res["files_extracted"] == 2
     assert len(res["applied_patches"]) == 0
-    assert (dest_dir / "README.md").read_text() == "# Original"
-    assert (dest_dir / "binary.dat").read_bytes() == b"\x00\x01\x02"
+    assert (repo_dir / "README.md").read_text() == "# Original"
+    assert (repo_dir / "binary.dat").read_bytes() == b"\x00\x01\x02"
 
 
 def test_restore_full_plus_patches(temp_dir):
@@ -425,12 +427,13 @@ def test_restore_full_plus_patches(temp_dir):
         repository="testorg/targetrepo",
     )
 
+    repo_dir = dest_dir / "testorg" / "targetrepo"
     assert len(res["applied_patches"]) == 2
-    assert (dest_dir / "file.txt").read_text() == "v3 final"
-    assert (dest_dir / "add1.txt").read_text() == "added in patch 1"
-    assert (dest_dir / "add2.txt").read_text() == "added in patch 2"
-    assert not (dest_dir / "del.txt").exists()
-    assert (dest_dir / "bin.dat").read_bytes() == b"\x01\x02\x99"
+    assert (repo_dir / "file.txt").read_text() == "v3 final"
+    assert (repo_dir / "add1.txt").read_text() == "added in patch 1"
+    assert (repo_dir / "add2.txt").read_text() == "added in patch 2"
+    assert not (repo_dir / "del.txt").exists()
+    assert (repo_dir / "bin.dat").read_bytes() == b"\x01\x02\x99"
 
     # Restore with date cutoff at 11:30:00 (should only apply Patch 1)
     dest_cutoff = temp_dir / "restored_cutoff"
@@ -441,11 +444,12 @@ def test_restore_full_plus_patches(temp_dir):
         target_date="2026-09-15 11:30:00",
     )
 
+    cutoff_repo_dir = dest_cutoff / "testorg" / "targetrepo"
     assert len(res_cutoff["applied_patches"]) == 1
     assert res_cutoff["applied_patches"][0]["filename"] == "testorg-repo-20260915_110000.patch"
-    assert (dest_cutoff / "file.txt").read_text() == "v2 modified"
-    assert (dest_cutoff / "add1.txt").read_text() == "added in patch 1"
-    assert not (dest_cutoff / "add2.txt").exists()
+    assert (cutoff_repo_dir / "file.txt").read_text() == "v2 modified"
+    assert (cutoff_repo_dir / "add1.txt").read_text() == "added in patch 1"
+    assert not (cutoff_repo_dir / "add2.txt").exists()
 
 
 def test_restore_force_overwrite(temp_dir):
@@ -455,9 +459,10 @@ def test_restore_force_overwrite(temp_dir):
     zip_file = source_dir / "testorg-repo-20260915_100000.zip"
     create_mock_full_backup(zip_file, "testorg", {"repo1": {"a.txt": "1"}})
 
-    target = temp_dir / "existing_repo"
-    target.mkdir()
-    (target / "conflict.txt").write_text("existing")
+    target = temp_dir / "target_base"
+    occupied_dir = target / "testorg" / "repo1"
+    occupied_dir.mkdir(parents=True)
+    (occupied_dir / "conflict.txt").write_text("existing")
 
     # Without force: must fail
     with pytest.raises(RestoreError, match="already exists and is not empty"):
@@ -476,8 +481,8 @@ def test_restore_force_overwrite(temp_dir):
         force=True,
     )
     assert res["files_extracted"] == 1
-    assert (target / "a.txt").read_text() == "1"
-    assert not (target / "conflict.txt").exists()
+    assert (occupied_dir / "a.txt").read_text() == "1"
+    assert not (occupied_dir / "conflict.txt").exists()
 
 
 # ==============================================================================
@@ -493,7 +498,7 @@ def test_cli_restore_invalid_repo_format(runner):
 
 
 def test_cli_restore_e2e(runner, temp_dir):
-    """Test CLI restore command end-to-end."""
+    """Test CLI restore command end-to-end and verifies <org>/<repo> folder created."""
     source_dir = temp_dir / "backups"
     source_dir.mkdir()
     zip_file = source_dir / "myorg-repo-20260915_100000.zip"
@@ -503,7 +508,7 @@ def test_cli_restore_e2e(runner, temp_dir):
         {"sample-repo": {"README.md": "# Sample", "main.py": "print('ok')"}},
     )
 
-    dest_dir = temp_dir / "restored_sample"
+    dest_dir = temp_dir / "restored_base"
 
     result = runner.invoke(
         app,
@@ -519,8 +524,9 @@ def test_cli_restore_e2e(runner, temp_dir):
 
     assert result.exit_code == 0
     assert "Repository Restored Successfully!" in result.output
-    assert (dest_dir / "README.md").read_text() == "# Sample"
-    assert (dest_dir / "main.py").read_text() == "print('ok')"
+    repo_dir = dest_dir / "myorg" / "sample-repo"
+    assert (repo_dir / "README.md").read_text() == "# Sample"
+    assert (repo_dir / "main.py").read_text() == "print('ok')"
 
 
 def test_cli_restore_with_date_and_force(runner, temp_dir):
@@ -534,9 +540,10 @@ def test_cli_restore_with_date_and_force(runner, temp_dir):
         {"my-tool": {"config.json": '{"v": 1}'}},
     )
 
-    dest_dir = temp_dir / "my-tool"
-    dest_dir.mkdir()
-    (dest_dir / "dirty.txt").write_text("dirty")
+    dest_dir = temp_dir / "restore_base"
+    repo_dir = dest_dir / "myorg" / "my-tool"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "dirty.txt").write_text("dirty")
 
     result = runner.invoke(
         app,
@@ -555,8 +562,8 @@ def test_cli_restore_with_date_and_force(runner, temp_dir):
 
     assert result.exit_code == 0
     assert "Repository Restored Successfully!" in result.output
-    assert (dest_dir / "config.json").read_text() == '{"v": 1}'
-    assert not (dest_dir / "dirty.txt").exists()
+    assert (repo_dir / "config.json").read_text() == '{"v": 1}'
+    assert not (repo_dir / "dirty.txt").exists()
 
 
 def test_cli_restore_fails_when_dest_not_empty_without_force(runner, temp_dir):
@@ -566,9 +573,10 @@ def test_cli_restore_fails_when_dest_not_empty_without_force(runner, temp_dir):
     zip_file = source_dir / "myorg-repo-20260915_100000.zip"
     create_mock_full_backup(zip_file, "myorg", {"repo1": {"a.txt": "1"}})
 
-    dest_dir = temp_dir / "occupied"
-    dest_dir.mkdir()
-    (dest_dir / "somefile.txt").write_text("content")
+    dest_dir = temp_dir / "restore_base"
+    repo_dir = dest_dir / "myorg" / "repo1"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "somefile.txt").write_text("content")
 
     result = runner.invoke(
         app,
@@ -586,3 +594,28 @@ def test_cli_restore_fails_when_dest_not_empty_without_force(runner, temp_dir):
     assert "already exists" in result.output
     assert "not empty" in result.output
     assert "--force" in result.output
+
+
+def test_restore_creates_org_repo_folder_structure(temp_dir):
+    """Test that restoring explicitly creates <org>/<repo> inside the chosen target folder."""
+    source_dir = temp_dir / "backups"
+    source_dir.mkdir()
+    zip_file = source_dir / "acme-repo-20260915_100000.zip"
+    create_mock_full_backup(
+        zip_file,
+        "acme",
+        {"widget": {"main.py": "print('widget')"}},
+    )
+
+    target_base = temp_dir / "my_custom_target"
+    res = restore_repository(
+        source_dir=source_dir,
+        target_dir=target_base,
+        repository="acme/widget",
+    )
+
+    expected_repo_dir = target_base / "acme" / "widget"
+    assert res["target_base"] == target_base
+    assert res["target_dir"] == expected_repo_dir
+    assert expected_repo_dir.exists()
+    assert (expected_repo_dir / "main.py").read_text() == "print('widget')"

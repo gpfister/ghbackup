@@ -117,8 +117,9 @@ Options:
                               Directory containing backup files (.zip and
                               .patch). Defaults to current directory.
   -t, --target, --target-dir DIRECTORY
-                              Destination directory to restore the
-                              repository to. Defaults to ./<repo>.
+                              Destination base directory where <org>/<repo> will
+                              be created and restored. Defaults to current
+                              directory.
   -d, -D, --date TEXT         Restore to the state at this date/time (e.g.
                               'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or
                               'YYYYMMDD_HHMMSS'). Defaults to latest
@@ -161,25 +162,25 @@ Output:
 
 ### 4. Restore Repository to Latest State
 ```bash
-# Restore repository gpfister/ghbackup from backups in current folder to ./ghbackup
+# Restore repository gpfister/ghbackup from backups in current folder into ./gpfister/ghbackup
 ./ghbackup restore gpfister/ghbackup
 
-# Specify source folder where backups are stored and a custom destination folder
-./ghbackup restore gpfister/ghbackup --source /mnt/backups --target /tmp/restored-ghbackup
+# Specify source folder where backups are stored and a custom destination folder (restores into /tmp/restores/gpfister/ghbackup)
+./ghbackup restore gpfister/ghbackup --source /mnt/backups --target /tmp/restores
 ```
 
 ### 5. Restore Repository to a Specific Date/Time
 ```bash
-# Restore repository as it existed on September 15, 2026 at 14:30
-./ghbackup restore gpfister/ghbackup -s /mnt/backups -t ./ghbackup -d "2026-09-15 14:30:00"
+# Restore repository as it existed on September 15, 2026 at 14:30 into /tmp/restores/gpfister/ghbackup
+./ghbackup restore gpfister/ghbackup -s /mnt/backups -t /tmp/restores -d "2026-09-15 14:30:00"
 
 # Restore by date (finds nearest full backup on/before date + patches in between)
-./ghbackup restore gpfister/ghbackup -s /mnt/backups -t ./ghbackup -d 2026-09-15
+./ghbackup restore gpfister/ghbackup -s /mnt/backups -t /tmp/restores -d 2026-09-15
 ```
 
 ### 6. Overwrite Existing Destination
 ```bash
-./ghbackup restore gpfister/ghbackup --target ./ghbackup --force
+./ghbackup restore gpfister/ghbackup --target /tmp/restores --force
 ```
 
 ### 7. Dry Run (Preview Repositories to Backup)

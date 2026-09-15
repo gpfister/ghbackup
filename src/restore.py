@@ -473,7 +473,8 @@ def restore_repository(
         )
 
     source_path = Path(source_dir).resolve()
-    target_path = Path(target_dir).resolve()
+    target_base = Path(target_dir).resolve()
+    target_path = target_base / org / repo
 
     # 2. Parse target date if provided as string
     parsed_date: Optional[datetime] = None
@@ -556,6 +557,7 @@ def restore_repository(
         "org": org,
         "repo": repo,
         "source_dir": source_path,
+        "target_base": target_base,
         "target_dir": target_path,
         "target_date": parsed_date,
         "base_backup": selected_full,
