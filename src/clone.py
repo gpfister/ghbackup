@@ -99,6 +99,8 @@ def clone_repository(
     cmd.append("clone")
     if mirror:
         cmd.append("--mirror")
+    else:
+        cmd.extend(["--no-single-branch", "--tags"])
 
     cmd.extend([clone_url, str(dest_path)])
 
@@ -120,6 +122,8 @@ def clone_repository(
             timeout=timeout,
         )
         if proc.returncode == 0:
+            if not mirror and dest_path.exists():
+                setup_local_branches(dest_path, env=env)
             return True, proc.stderr.strip()
         else:
             err_msg = proc.stderr.strip() or proc.stdout.strip()
@@ -128,6 +132,77 @@ def clone_repository(
         return False, f"Git clone timed out after {timeout} seconds"
     except Exception as e:
         return False, f"Git clone failed: {e}"
+
+
+def setup_local_branches(repo_dir: Path, env: Optional[Dict[str, str]] = None) -> None:
+    """Create local tracking branches for all remote branches.
+
+    When git clone is executed without --mirror, only the default branch
+    has a local tracking branch created. This function inspects all remote
+    branches and sets up local tracking branches for every branch that
+    does not already exist locally, ensuring all branches and their
+    complete history are available locally.
+    """
+    if not (repo_dir / ".git").exists():
+        return
+
+    try:
+        # Get existing local branches
+        res_local = subprocess.run(
+            ["git", "-C", str(repo_dir), "for-each-ref", "--format=%(refname)", "refs/heads/"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        if res_local.returncode != 0:
+            return
+
+        local_heads = {
+            line.strip()[len("refs/heads/"):]
+            for line in res_local.stdout.splitlines()
+            if line.strip().startswith("refs/heads/")
+        }
+
+        # Get remote branches from all remotes (typically origin)
+        res_remotes = subprocess.run(
+            ["git", "-C", str(repo_dir), "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes/"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        if res_remotes.returncode != 0:
+            return
+
+        for line in res_remotes.stdout.splitlines():
+            parts = line.strip().split()
+            if not parts or len(parts) > 1:
+                # Skip empty lines or symrefs (e.g. refs/remotes/origin/HEAD)
+                continue
+
+            refname = parts[0]
+            if not refname.startswith("refs/remotes/"):
+                continue
+
+            rel = refname[len("refs/remotes/"):]
+            remote_name, _, branch_name = rel.partition("/")
+            if not remote_name or not branch_name:
+                continue
+
+            if branch_name == "HEAD" or branch_name.endswith("/HEAD"):
+                continue
+
+            if branch_name not in local_heads:
+                subprocess.run(
+                    ["git", "-C", str(repo_dir), "branch", "--track", branch_name, f"{remote_name}/{branch_name}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
+                )
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not setup local tracking branches for {repo_dir.name}: {e}[/yellow]")
 
 
 def clone_all_repositories(

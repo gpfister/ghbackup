@@ -15,7 +15,12 @@ import pytest
 from click.testing import CliRunner
 
 from src.backup import create_full_backup, create_partial_backup
-from src.clone import clone_all_repositories, clone_repository, rotate_backup_directories
+from src.clone import (
+    clone_all_repositories,
+    clone_repository,
+    rotate_backup_directories,
+    setup_local_branches,
+)
 from src.github import fetch_org_or_user_repos, resolve_github_token
 from src.main import app
 
@@ -500,3 +505,140 @@ def test_clone_repository_with_ssh_key_spaces(temp_dir):
         expected_quoted = f"ssh -i '{key_file.resolve()}' -o IdentitiesOnly=yes"
         assert f"core.sshCommand={expected_quoted}" in cmd
         assert env["GIT_SSH_COMMAND"] == expected_quoted
+
+
+def test_clone_repository_command_flags(temp_dir):
+    """Test clone_repository passes --no-single-branch and --tags when mirror=False."""
+    repo_info = {
+        "name": "sample-repo",
+        "clone_url": "https://github.com/myorg/sample-repo.git",
+    }
+
+    with patch("subprocess.run") as mock_run:
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stderr = ""
+        mock_run.return_value = mock_proc
+
+        success, _ = clone_repository(repo_info=repo_info, target_dir=temp_dir, mirror=False)
+        assert success is True
+        cmd = mock_run.call_args[0][0]
+        assert "--no-single-branch" in cmd
+        assert "--tags" in cmd
+        assert "--mirror" not in cmd
+
+    with patch("subprocess.run") as mock_run_mirror:
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stderr = ""
+        mock_run_mirror.return_value = mock_proc
+
+        success, _ = clone_repository(repo_info=repo_info, target_dir=temp_dir, mirror=True)
+        assert success is True
+        cmd_mirror = mock_run_mirror.call_args[0][0]
+        assert "--mirror" in cmd_mirror
+        assert "--no-single-branch" not in cmd_mirror
+
+
+def test_setup_local_branches_non_git(temp_dir):
+    """Test setup_local_branches handles non-git or missing directories safely."""
+    non_git = temp_dir / "not_git"
+    non_git.mkdir()
+    # Should not raise any exception
+    setup_local_branches(non_git)
+
+
+def test_clone_repository_gets_all_branches_and_history_e2e(temp_dir):
+    """Integration test verifying clone_repository gets all branches and full history."""
+    origin_dir = temp_dir / "origin"
+    origin_dir.mkdir()
+
+    # Configure local git origin repo with multiple branches and tags
+    subprocess.run(["git", "init", str(origin_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(origin_dir), "config", "user.name", "Tester"], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "config", "user.email", "tester@test.com"], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "checkout", "-b", "main"], check=True, capture_output=True)
+
+    # Commit 1 on main
+    (origin_dir / "main.txt").write_text("main file v1")
+    subprocess.run(["git", "-C", str(origin_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "commit", "-m", "initial main commit"], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "tag", "v1.0.0"], check=True)
+
+    # Branch 2: feature-a
+    subprocess.run(["git", "-C", str(origin_dir), "checkout", "-b", "feature-a"], check=True, capture_output=True)
+    (origin_dir / "feature_a.txt").write_text("feature A content")
+    subprocess.run(["git", "-C", str(origin_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "commit", "-m", "commit on feature-a"], check=True)
+
+    # Branch 3: feature/nested/b with tag v2.0.0
+    subprocess.run(["git", "-C", str(origin_dir), "checkout", "-b", "feature/nested/b"], check=True, capture_output=True)
+    (origin_dir / "nested.txt").write_text("nested feature content")
+    subprocess.run(["git", "-C", str(origin_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "commit", "-m", "commit on nested feature"], check=True)
+    subprocess.run(["git", "-C", str(origin_dir), "tag", "v2.0.0"], check=True)
+
+    # Switch back to main
+    subprocess.run(["git", "-C", str(origin_dir), "checkout", "main"], check=True, capture_output=True)
+
+    target_dir = temp_dir / "target"
+    target_dir.mkdir()
+
+    repo_info = {
+        "name": "test-repo",
+        "clone_url": str(origin_dir),
+    }
+
+    success, msg = clone_repository(
+        repo_info=repo_info,
+        target_dir=target_dir,
+        mirror=False,
+    )
+
+    assert success is True
+    cloned_path = target_dir / "test-repo"
+    assert cloned_path.exists()
+
+    # 1. Verify all local branches exist
+    res_branches = subprocess.run(
+        ["git", "-C", str(cloned_path), "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    local_branches = set(res_branches.stdout.splitlines())
+    assert "main" in local_branches
+    assert "feature-a" in local_branches
+    assert "feature/nested/b" in local_branches
+
+    # 2. Verify all tags are present
+    res_tags = subprocess.run(
+        ["git", "-C", str(cloned_path), "tag"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tags = set(res_tags.stdout.splitlines())
+    assert "v1.0.0" in tags
+    assert "v2.0.0" in tags
+
+    # 3. Verify all commits are present in history
+    res_log = subprocess.run(
+        ["git", "-C", str(cloned_path), "log", "--oneline", "--all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    log_output = res_log.stdout
+    assert "initial main commit" in log_output
+    assert "commit on feature-a" in log_output
+    assert "commit on nested feature" in log_output
+
+    # 4. Verify checking out another branch offline works and has branch-specific content
+    subprocess.run(["git", "-C", str(cloned_path), "checkout", "feature-a"], check=True, capture_output=True)
+    assert (cloned_path / "feature_a.txt").exists()
+    assert (cloned_path / "feature_a.txt").read_text() == "feature A content"
+
+    subprocess.run(["git", "-C", str(cloned_path), "checkout", "feature/nested/b"], check=True, capture_output=True)
+    assert (cloned_path / "nested.txt").exists()
+    assert (cloned_path / "nested.txt").read_text() == "nested feature content"

@@ -20,6 +20,9 @@ A modern, fast Python CLI tool to backup entire GitHub organizations and user ac
 - **Automatic Directory Rotation:**
   - Clones into `<org>-repo`.
   - If `<org>-repo` already exists, any existing `<org>-repo-previous` is removed and `<org>-repo` is renamed to `<org>-repo-previous`.
+- **Full History & Multi-Branch Backups:**
+  - Clones all branches and full history (`--no-single-branch` and `--tags`).
+  - Sets up local tracking branches for all remote branches, ensuring every branch and its complete commit history is accessible offline.
 - **Dual Support for Organizations & Users:**
   - Seamlessly checks `/orgs/{org}/repos`, falling back to `/users/{user}/repos` if the target is a user account (e.g. `gpfister`).
 - **Binary Compatibility:**
