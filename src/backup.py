@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from rich.console import Console
 
+from src.retention import (
+    apply_retention_policy,
+    evaluate_retention_policy,
+    parse_retention_policy,
+)
+
 console = Console()
 
 

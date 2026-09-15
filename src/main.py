@@ -21,6 +21,7 @@ from src.github import (
     resolve_github_token,
 )
 from src.restore import RestoreError, restore_repository
+from src.retention import apply_retention_policy, parse_retention_policy
 
 console = Console()
 error_console = Console(stderr=True)
@@ -140,6 +141,15 @@ def app() -> None:
     default=False,
     help="Fetch and list repositories without cloning or creating backups.",
 )
+@click.option(
+    "--retention-policy",
+    "-R",
+    "retention_policy_str",
+    default=None,
+    help="Retention policy formatted as 'HOURLY_DAYS,DAILY_DAYS,WEEKLY_WEEKS' (e.g. '7,30,52'). "
+         "Retains hourly backups for H days (full+partial), daily backups for D days (full only), "
+         "and weekly backups for W weeks (first full backup of each week).",
+)
 def backup_cmd(
     org: str,
     full_mode: bool,
@@ -154,6 +164,7 @@ def backup_cmd(
     mirror: bool,
     selected_repos: tuple,
     dry_run: bool,
+    retention_policy_str: Optional[str] = None,
 ) -> None:
     """Backup an entire GitHub organization or user repositories."""
     # Validate backup mode
@@ -171,6 +182,15 @@ def backup_cmd(
             "and [bold cyan]--partial[/bold cyan]. Please choose one mode."
         )
         sys.exit(1)
+
+    # Validate retention policy if provided
+    parsed_retention: Optional[Tuple[int, int, int]] = None
+    if retention_policy_str:
+        try:
+            parsed_retention = parse_retention_policy(retention_policy_str)
+        except ValueError as e:
+            error_console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
 
     # Validate SSH key if provided
     ssh_key_path: Optional[Path] = None
@@ -227,6 +247,9 @@ def backup_cmd(
     ]
     if ssh_key_path:
         config_lines.append(f"[bold]SSH Key:[/bold] [cyan]{ssh_key_path}[/cyan]")
+    if parsed_retention:
+        h, d, w = parsed_retention
+        config_lines.append(f"[bold]Retention Policy:[/bold] [cyan]{h} days hourly, {d} days daily, {w} weeks weekly[/cyan]")
 
     console.print(
         Panel.fit(
@@ -373,6 +396,36 @@ def backup_cmd(
                 f"[bold cyan]To apply this patch to a previous backup directory:[/bold cyan]\n"
                 f"  git apply -p2 --unsafe-paths --directory=<destination_folder> {patch_info['patch_path']}",
                 title="[bold]Backup Result[/bold]",
+                border_style="green",
+            )
+        )
+
+    # Step 5: Retention Policy Enforcement
+    if parsed_retention:
+        console.print("\n[bold]Applying retention policy...[/bold]")
+        h_days, d_days, w_weeks = parsed_retention
+        retention_summary = apply_retention_policy(
+            output_dir=output_dir,
+            org=org,
+            hourly_days=h_days,
+            daily_days=d_days,
+            weekly_weeks=w_weeks,
+        )
+        msg_lines = [
+            f"[bold green]Retention Policy Applied Successfully![/bold green]",
+            f"[bold]Policy:[/bold] {h_days} days hourly, {d_days} days daily, {w_weeks} weeks weekly",
+            f"[bold]Backups Evaluated:[/bold] {retention_summary['total_found']}",
+            f"[bold]Backups Retained:[/bold] [green]{retention_summary['total_kept']}[/green]",
+            f"[bold]Backups Pruned:[/bold] [yellow]{retention_summary['total_removed']}[/yellow]",
+        ]
+        if retention_summary["removed_filenames"]:
+            msg_lines.append("[bold]Pruned Files:[/bold]")
+            for fn in retention_summary["removed_filenames"]:
+                msg_lines.append(f"  - [red]{fn}[/red]")
+        console.print(
+            Panel.fit(
+                "\n".join(msg_lines),
+                title="[bold]Retention Result[/bold]",
                 border_style="green",
             )
         )

@@ -13,6 +13,13 @@ A modern, fast Python CLI tool to backup entire GitHub organizations and user ac
 - **Backup Modes (`backup`):**
   - **Full Backup (`--full` / `-f`)**: Clones all repositories and packages them into a compressed `.zip` archive.
   - **Partial Backup (`--partial` / `-p`)**: Rotates existing repositories from `<org>-repo` to `<org>-repo-previous`, clones the latest state into `<org>-repo`, and computes a binary-compatible `.patch` using `git diff --binary --no-index`. Requires an existing `<org>-repo` directory from a prior backup.
+- **Configurable Retention Policy (`--retention-policy` / `-R`)**:
+  - Automatically prunes obsolete backups according to a retention policy formatted as `HOURLY_DAYS,DAILY_DAYS,WEEKLY_WEEKS` (e.g. `--retention-policy 7,30,52`).
+  - Retains the last `H` days of hourly backups (both full and partial).
+  - Retains the last `D` days of daily backups (keeping only full backups, 1 per day).
+  - Retains the last `W` weeks of weekly backups (keeping one daily backup per week, the first full backup of the week).
+  - Handles overlapping windows seamlessly by prioritizing the policy that retains the most details (`hourly > daily > weekly`).
+  - Preserves canonical symlinks/files (`<org>-repo.zip` and `<org>-repo.patch`) and clone directories safely.
 - **Repository Restore (`restore`):**
   - **Point-in-Time Restore**: Accepts an optional `--date` / `-d` and restores the repository from the nearest full backup on or before that date, followed by sequentially applying all intermediate patches up to that date.
   - **Custom Source & Target Directories**: Select the source directory containing backup archives/patches (`--source` / `-s`) and the target destination folder (`--target` / `-t`).
@@ -99,6 +106,12 @@ Options:
                               omitted, all repositories are backed up.
   --dry-run                   Fetch and list repositories without cloning or
                               creating backups.
+  -R, --retention-policy TEXT Retention policy formatted as
+                              'HOURLY_DAYS,DAILY_DAYS,WEEKLY_WEEKS' (e.g.
+                              '7,30,52'). Retains hourly backups for H
+                              days (full+partial), daily backups for D
+                              days (full only), and weekly backups for W
+                              weeks (first full backup of each week).
   -h, --help                  Show this message and exit.
 ```
 
@@ -163,7 +176,24 @@ Output:
 - Clones fresh repositories into `./gpfister-repo/`
 - Creates `./gpfister-repo-YYYYMMDD_HHMMSS.patch` (and updates `./gpfister-repo.patch`)
 
-### 4. Restore Repository to Latest State
+### 4. Backup with Retention Policy
+Apply a GFS retention policy during backup to keep hourly, daily, and weekly points in time:
+```bash
+# Retain 7 days of hourly (full + partial), 30 days of daily (full only), 52 weeks of weekly (1st full of week)
+./ghbackup backup --full --retention-policy 7,30,52 gpfister
+
+# Or with partial mode using short flag -R:
+./ghbackup backup --partial -R 7,30,52 gpfister
+```
+**Retention Rules:**
+- **Hourly (last 7 days)**: Retains all backups (both full `.zip` archives and partial `.patch` files).
+- **Daily (last 30 days)**: Retains only full backups (1 per day, the first full backup of each day).
+- **Weekly (last 52 weeks)**: Retains 1 full backup per week (the first full backup of the week).
+- **Older than 52 weeks**: Backups older than 52 weeks are pruned.
+- **Overlap & Priority**: When windows overlap (e.g. within 7 days, or within 30 days), the policy that preserves the most details takes priority (`hourly > daily > weekly`).
+- **Safety**: Canonical symlinks/files (`<org>-repo.zip`, `<org>-repo.patch`) and clone directories are always preserved.
+
+### 5. Restore Repository to Latest State
 ```bash
 # Restore repository gpfister/ghbackup from backups in current folder into ./gpfister/ghbackup
 ./ghbackup restore gpfister/ghbackup
@@ -172,7 +202,7 @@ Output:
 ./ghbackup restore gpfister/ghbackup --source /mnt/backups --target /tmp/restores
 ```
 
-### 5. Restore Repository to a Specific Date/Time
+### 6. Restore Repository to a Specific Date/Time
 ```bash
 # Restore repository as it existed on September 15, 2026 at 14:30 into /tmp/restores/gpfister/ghbackup
 ./ghbackup restore gpfister/ghbackup -s /mnt/backups -t /tmp/restores -d "2026-09-15 14:30:00"
@@ -181,12 +211,12 @@ Output:
 ./ghbackup restore gpfister/ghbackup -s /mnt/backups -t /tmp/restores -d 2026-09-15
 ```
 
-### 6. Overwrite Existing Destination
+### 7. Overwrite Existing Destination
 ```bash
 ./ghbackup restore gpfister/ghbackup --target /tmp/restores --force
 ```
 
-### 7. Dry Run (Preview Repositories to Backup)
+### 8. Dry Run (Preview Repositories to Backup)
 ```bash
 ./ghbackup backup --dry-run gpfister
 ```
@@ -207,6 +237,7 @@ Output:
 │   ├── github.py           # GitHub API client with org & user discovery
 │   ├── clone.py            # Git cloning and directory rotation logic
 │   ├── backup.py           # Full (.zip) and Partial (.patch) creation
+│   ├── retention.py        # Retention policy evaluation and enforcement
 │   └── restore.py          # Point-in-time restore from full backup + patches
 └── tests/
     ├── test_backup.py      # Backup command and rotation test suite
